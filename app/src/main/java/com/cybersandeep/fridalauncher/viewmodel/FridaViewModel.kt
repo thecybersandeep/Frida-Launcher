@@ -128,6 +128,33 @@ class FridaViewModel : ViewModel() {
         _selectedVersion.value = version
     }
     
+    fun setStatusMessage(message: String) {
+        _statusMessage.value = message
+    }
+    
+    suspend fun validateAndSetCustomVersion(version: String): Boolean {
+        _statusMessage.value = "Validating custom version: $version"
+        Logger.i("Validating custom version: $version")
+        
+        return try {
+            val isValid = FridaUtils.validateCustomVersion(version)
+            
+            if (isValid) {
+                _selectedVersion.value = version
+                _statusMessage.value = "✓ Version $version validated successfully"
+                Logger.i("Custom version $version validated successfully")
+                true
+            } else {
+                _statusMessage.value = "✗ Version $version not found on GitHub"
+                Logger.e("Custom version $version not found on GitHub")
+                false
+            }
+        } catch (e: Exception) {
+            _statusMessage.value = "Error validating version: ${e.message}"
+            Logger.e("Error validating custom version", e)
+            false
+        }
+    }
 
     fun setSelectedArchitecture(architecture: String) {
         _selectedArchitecture.value = architecture

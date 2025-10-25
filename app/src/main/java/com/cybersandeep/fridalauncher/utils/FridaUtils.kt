@@ -165,8 +165,14 @@ object FridaUtils {
             try {
                 val releases = getAvailableFridaReleases()
                 
-                // First try exact version match
-                val release = releases.find { it.version == version }
+                // First try exact version match in cached releases
+                var release = releases.find { it.version == version }
+                
+                // If not found in cached list, fetch from GitHub API directly
+                if (release == null) {
+                    Logger.i("Version $version not in cached list, checking GitHub API...")
+                    release = fetchSpecificVersion(version)
+                }
                 
                 if (release != null) {
                     // Try exact architecture match
@@ -192,6 +198,74 @@ object FridaUtils {
                 return@withContext null
             } catch (e: Exception) {
                 Logger.e("Error fetching Frida server URL", e)
+                return@withContext null
+            }
+        }
+    }
+    
+    /**
+     * Validate if a custom version exists on GitHub
+     */
+    suspend fun validateCustomVersion(version: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val release = fetchSpecificVersion(version)
+                release != null
+            } catch (e: Exception) {
+                Logger.e("Error validating custom version", e)
+                false
+            }
+        }
+    }
+    
+    /**
+     * Fetch a specific version from GitHub API
+     */
+    private suspend fun fetchSpecificVersion(version: String): FridaRelease? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(30, TimeUnit.SECONDS)
+                    .readTimeout(30, TimeUnit.SECONDS)
+                    .build()
+                
+                val request = Request.Builder()
+                    .url("$FRIDA_GITHUB_API/tags/$version")
+                    .build()
+                
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Logger.e("Version $version not found on GitHub (HTTP ${response.code})")
+                        return@withContext null
+                    }
+                    
+                    val jsonString = response.body?.string() ?: return@withContext null
+                    val gson = Gson()
+                    val githubRelease = gson.fromJson(jsonString, GithubRelease::class.java)
+                    
+                    val assets = githubRelease.assets
+                        .filter { it.name.startsWith("frida-server-") && it.name.endsWith(".xz") }
+                        .map { asset ->
+                            val archPattern = Regex("frida-server-.*-android-(.+)\\.xz")
+                            val matchResult = archPattern.find(asset.name)
+                            val architecture = matchResult?.groupValues?.get(1) ?: "unknown"
+                            
+                            FridaAsset(
+                                name = asset.name,
+                                downloadUrl = asset.browserDownloadUrl,
+                                architecture = architecture,
+                                size = asset.size
+                            )
+                        }
+                    
+                    return@withContext FridaRelease(
+                        version = githubRelease.tagName,
+                        releaseDate = githubRelease.publishedAt.substring(0, 10),
+                        assets = assets
+                    )
+                }
+            } catch (e: Exception) {
+                Logger.e("Error fetching specific version $version", e)
                 return@withContext null
             }
         }

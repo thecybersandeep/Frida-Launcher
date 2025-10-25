@@ -5,15 +5,19 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
 import android.text.method.ScrollingMovementMethod
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
@@ -400,7 +404,10 @@ class MainActivity : AppCompatActivity() {
             if (releases.isNotEmpty()) {
                 val versionItems = releases.map { 
                     "Version: ${it.version}\nDate: ${it.releaseDate}" 
-                }.toTypedArray()
+                }.toMutableList()
+                
+                // Add "Custom Version..." option at the end
+                versionItems.add("Custom Version...\nEnter version manually")
                 
                 val versionAdapter = ArrayAdapter(this, R.layout.spinner_item, versionItems)
                 versionAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item)
@@ -408,8 +415,13 @@ class MainActivity : AppCompatActivity() {
                 
                 binding.versionSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                     override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                        val selectedVersion = releases[position].version
-                        viewModel.setSelectedVersion(selectedVersion)
+                        // Check if "Custom Version..." is selected (last item)
+                        if (position == versionItems.size - 1) {
+                            showCustomVersionDialog()
+                        } else {
+                            val selectedVersion = releases[position].version
+                            viewModel.setSelectedVersion(selectedVersion)
+                        }
                     }
                     
                     override fun onNothingSelected(parent: AdapterView<*>?) {
@@ -417,5 +429,59 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+    
+    private fun showCustomVersionDialog() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT
+            hint = "e.g., 16.5.9"
+            setPadding(50, 40, 50, 40)
+        }
+        
+        AlertDialog.Builder(this, R.style.Theme_Fridalauncher_Dialog)
+            .setTitle("Enter Custom Frida Version")
+            .setMessage("Enter the version tag (e.g., 16.5.9)\n\nThe version will be validated against GitHub.")
+            .setView(input)
+            .setPositiveButton("Validate & Use") { dialog, _ ->
+                val version = input.text.toString().trim()
+                
+                // Validate format (basic check for version pattern)
+                if (!isValidVersionFormat(version)) {
+                    viewModel.setStatusMessage("✗ Invalid version format. Use format like: 16.5.9")
+                    // Reset spinner to first item
+                    binding.versionSpinner.setSelection(0)
+                    dialog.dismiss()
+                    return@setPositiveButton
+                }
+                
+                // Log custom version selection
+                viewModel.setStatusMessage("Selecting custom version: $version")
+                
+                // Validate version exists on GitHub
+                lifecycleScope.launch {
+                    val isValid = viewModel.validateAndSetCustomVersion(version)
+                    
+                    if (!isValid) {
+                        // Reset spinner to first item if validation failed
+                        binding.versionSpinner.setSelection(0)
+                    }
+                }
+                
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel") { dialog, _ ->
+                viewModel.setStatusMessage("Custom version selection cancelled")
+                // Reset spinner to first item
+                binding.versionSpinner.setSelection(0)
+                dialog.dismiss()
+            }
+            .setCancelable(false)
+            .show()
+    }
+    
+    private fun isValidVersionFormat(version: String): Boolean {
+        // Validate version format: should match pattern like "16.5.9" or "16.5.9-beta"
+        val versionPattern = Regex("^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9]+)?$")
+        return versionPattern.matches(version)
     }
 }
